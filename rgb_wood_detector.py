@@ -2,7 +2,7 @@
 """
 Color-based Wood Detection with 4-Point Rectangle Detection
 This module provides robust wood detection using:
-1. HSV color analysis for wood tones
+1. RGB color analysis for wood tones
 2. Contour detection for rectangular shapes
 3. Automatic ROI generation
 4. Adaptive thresholding
@@ -17,19 +17,19 @@ class ColorWoodDetector:
     def __init__(self):
         self.wood_color_profiles = {
             'top_panel': {
-                'hsv_lower': np.array([95, 35, 195]),  # Tightened around target H97-98, S39-40, V204-205
-                'hsv_upper': np.array([100, 45, 215]),  # Reduced over-detection of non-wood elements
+                'rgb_lower': np.array([96, 100, 80]),  # BGR order
+                'rgb_upper': np.array([230, 210, 200]),
                 'name': 'Top Panel Wood'
             },
             'bottom_panel': {
-                'hsv_lower': np.array([95, 35, 195]),  # Tightened around target H97-98, S39-40, V204-205
-                'hsv_upper': np.array([100, 45, 215]),  # Reduced over-detection of non-wood elements
+                'rgb_lower': np.array([135, 145, 95]),  # RGB range for wood detection
+                'rgb_upper': np.array([200, 220, 230]),  # RGB range for wood detection
                 'name': 'Bottom Panel Wood'
             }
         }
         
         # Detection parameters
-        self.min_contour_area = 2000      # Increased for more reliable detection with tighter HSV ranges
+        self.min_contour_area = 2000      # Increased for more reliable detection with tighter RGB ranges
         self.max_contour_area = 500000    # Slightly reduced for typical wood plank sizes
         self.min_aspect_ratio = 1.0       # Tightened for more rectangular wood shapes
         self.max_aspect_ratio = 10.0      # Reduced for more typical plank proportions
@@ -61,44 +61,44 @@ class ColorWoodDetector:
         if image is None:
             return {"error": "Could not load image"}
         
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w = image.shape[:2]
-        
+
         analysis = {
             "image_size": f"{w}x{h}",
             "wood_profiles_detected": {},
             "dominant_colors": {},
             "recommendations": []
         }
-        
+
         # Test each wood color profile
         for profile_name, profile in self.wood_color_profiles.items():
-            mask = cv2.inRange(hsv, profile['hsv_lower'], profile['hsv_upper'])
+            mask = cv2.inRange(rgb, profile['rgb_lower'], profile['rgb_upper'])
             pixels_detected = cv2.countNonZero(mask)
             percentage = (pixels_detected / (h * w)) * 100
-            
+
             analysis["wood_profiles_detected"][profile_name] = {
                 "pixels": pixels_detected,
                 "percentage": round(percentage, 2),
                 "detected": percentage > 1.0  # Consider detected if >1% of image
             }
-            
+
             if percentage > 1.0:
                 print(f"  ✅ {profile['name']}: {percentage:.1f}% of image")
             else:
                 print(f"  ❌ {profile['name']}: {percentage:.1f}% of image")
-        
-        # Find dominant colors in HSV
-        hsv_flat = hsv.reshape(-1, 3)
-        h_values = hsv_flat[:, 0]
-        s_values = hsv_flat[:, 1]
-        v_values = hsv_flat[:, 2]
-        
+
+        # Find dominant colors in RGB
+        rgb_flat = rgb.reshape(-1, 3)
+        r_values = rgb_flat[:, 0]
+        g_values = rgb_flat[:, 1]
+        b_values = rgb_flat[:, 2]
+
         analysis["dominant_colors"] = {
-            "hue_mean": int(np.mean(h_values)),
-            "hue_std": int(np.std(h_values)),
-            "saturation_mean": int(np.mean(s_values)),
-            "value_mean": int(np.mean(v_values))
+            "red_mean": int(np.mean(r_values)),
+            "red_std": int(np.std(r_values)),
+            "green_mean": int(np.mean(g_values)),
+            "blue_mean": int(np.mean(b_values))
         }
         
         # Generate recommendations
@@ -112,7 +112,7 @@ class ColorWoodDetector:
             analysis["recommendations"].append(f"Use {best_profiles[0][0]} profile as primary detection method")
         else:
             analysis["recommendations"].append("Consider creating custom color profile for this wood type")
-            analysis["recommendations"].append(f"Dominant HSV: H={analysis['dominant_colors']['hue_mean']}, S={analysis['dominant_colors']['saturation_mean']}, V={analysis['dominant_colors']['value_mean']}")
+            analysis["recommendations"].append(f"Dominant RGB: R={analysis['dominant_colors']['red_mean']}, G={analysis['dominant_colors']['green_mean']}, B={analysis['dominant_colors']['blue_mean']}")
         
         return analysis
     
@@ -121,16 +121,17 @@ class ColorWoodDetector:
         if profile_names is None:
             profile_names = list(self.wood_color_profiles.keys())
 
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         # Apply histogram equalization on V channel for better lighting compensation
-        h, s, v = cv2.split(hsv)
+        hsv_temp = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv_temp)
         v = cv2.equalizeHist(v)
-        hsv = cv2.merge([h, s, v])
+        hsv_temp = cv2.merge([h, s, v])
+        rgb = cv2.cvtColor(hsv_temp, cv2.COLOR_HSV2BGR)
 
-        # Dynamically update HSV ranges based on dominant colors
-        self.update_hsv_ranges_based_on_dominant_colors(hsv)
+        # # Dynamically update RGB ranges based on dominant colors
+        # self.update_rgb_ranges_based_on_dominant_colors(rgb)
 
-        combined_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        combined_mask = np.zeros(rgb.shape[:2], dtype=np.uint8)
 
         detections = []
 
@@ -140,11 +141,11 @@ class ColorWoodDetector:
         for profile_name in profile_names:
             if profile_name in self.wood_color_profiles:
                 profile = self.wood_color_profiles[profile_name]
-                mask = cv2.inRange(hsv, profile['hsv_lower'], profile['hsv_upper'])
+                mask = cv2.inRange(rgb, profile['rgb_lower'], profile['rgb_upper'])
                 mask_pixels = cv2.countNonZero(mask)
-                total_pixels = hsv.shape[0] * hsv.shape[1]
+                total_pixels = rgb.shape[0] * rgb.shape[1]
                 mask_percentage = (mask_pixels / total_pixels) * 100
-                print(f"  📊 {profile_name}: HSV range {profile['hsv_lower']} - {profile['hsv_upper']}, mask {mask_pixels} pixels ({mask_percentage:.1f}%)")
+                print(f"  📊 {profile_name}: RGB range {profile['rgb_lower']} - {profile['rgb_upper']}, mask {mask_pixels} pixels ({mask_percentage:.1f}%)")
                 combined_mask = cv2.bitwise_or(combined_mask, mask)
 
         pre_morph_pixels = cv2.countNonZero(combined_mask)
@@ -162,25 +163,27 @@ class ColorWoodDetector:
         print(f"🔧 Post-morph combined mask: {post_morph_pixels} pixels ({post_morph_percentage:.1f}%)")
 
         # Additional logging for dominant colors
-        hsv_flat = hsv.reshape(-1, 3)
-        h_values = hsv_flat[:, 0]
-        s_values = hsv_flat[:, 1]
-        v_values = hsv_flat[:, 2]
-        print(f"🎨 Dominant HSV in image: H={int(np.mean(h_values)):.0f}±{int(np.std(h_values)):.0f}, S={int(np.mean(s_values)):.0f}, V={int(np.mean(v_values)):.0f}")
+        rgb_flat = rgb.reshape(-1, 3)
+        r_values = rgb_flat[:, 0]
+        g_values = rgb_flat[:, 1]
+        b_values = rgb_flat[:, 2]
+        print(f"🎨 Dominant RGB in image: R={int(np.mean(r_values)):.0f}±{int(np.std(r_values)):.0f}, G={int(np.mean(g_values)):.0f}, B={int(np.mean(b_values)):.0f}")
 
         return combined_mask, detections
 
-    def update_hsv_ranges_based_on_dominant_colors(self, hsv):
-        """Dynamically adjust HSV ranges based on dominant colors in the image"""
-        hsv_flat = hsv.reshape(-1, 3)
-        hue_mean = int(np.mean(hsv_flat[:, 0]))
-        sat_mean = int(np.mean(hsv_flat[:, 1]))
-        val_mean = int(np.mean(hsv_flat[:, 2]))
+    def update_rgb_ranges_based_on_dominant_colors(self, rgb):
+        """Dynamically adjust RGB ranges based on dominant colors in the image"""
+        rgb_flat = rgb.reshape(-1, 3)
+        r_mean = int(np.mean(rgb_flat[:, 0]))
+        g_mean = int(np.mean(rgb_flat[:, 1]))
+        b_mean = int(np.mean(rgb_flat[:, 2]))
 
         # Update profiles based on dominant colors
-        self.wood_color_profiles['top_panel']['hsv_lower'] = np.array([max(0, hue_mean - 15), max(0, sat_mean - 20), max(0, val_mean - 30)])
-        self.wood_color_profiles['top_panel']['hsv_upper'] = np.array([min(180, hue_mean + 15), min(255, sat_mean + 20), min(255, val_mean + 30)])
-        print(f"🔧 Dynamically updated HSV ranges: H=[{hue_mean-15}-{hue_mean+15}], S=[{sat_mean-20}-{sat_mean+20}], V=[{val_mean-30}-{val_mean+30}]")
+        self.wood_color_profiles['top_panel']['rgb_lower'] = np.array([max(0, r_mean - 30), max(0, g_mean - 30), max(0, b_mean - 30)])
+        self.wood_color_profiles['top_panel']['rgb_upper'] = np.array([min(255, r_mean + 30), min(255, g_mean + 30), min(255, b_mean + 30)])
+        self.wood_color_profiles['bottom_panel']['rgb_lower'] = np.array([max(0, r_mean - 30), max(0, g_mean - 30), max(0, b_mean - 30)])
+        self.wood_color_profiles['bottom_panel']['rgb_upper'] = np.array([min(255, r_mean + 30), min(255, g_mean + 30), min(255, b_mean + 30)])
+        print(f"🔧 Dynamically updated RGB ranges: R=[{r_mean-30}-{r_mean+30}], G=[{g_mean-30}-{g_mean+30}], B=[{b_mean-30}-{b_mean+30}]")
     
     def detect_rectangular_contours(self, mask: np.ndarray) -> List[Dict]:
         """Detect rectangular contours that could be wood planks"""
@@ -406,23 +409,23 @@ class ColorWoodDetector:
         return wood_detected
 
     def _detect_wood_by_color(self, frame):
-        """Detect wood using HSV color segmentation"""
+        """Detect wood using RGB color segmentation"""
         try:
-            hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            
+            rgb_frame = frame
+
             # Define multiple wood color ranges to handle different wood types (refined for consistency)
             wood_ranges = [
-                # Light wood (pine, birch) - tightened around target values
-                ([90, 35, 190], [100, 50, 220]),
-                # Medium wood (oak, maple) - tightened around target values
-                ([92, 35, 195], [98, 45, 215]),
-                # Dark wood (walnut, mahogany) - tightened around target values
-                ([85, 30, 180], [95, 40, 200])
+                # Light wood (pine, birch) - RGB range
+                ([150, 159, 109], [230, 210, 200]),
+                # Medium wood (oak, maple) - RGB range
+                ([130, 150, 160], [180, 200, 210]),
+                # Dark wood (walnut, mahogany) - RGB range
+                ([100, 120, 130], [160, 180, 190])
             ]
             
             combined_mask = None
             for lower, upper in wood_ranges:
-                mask = cv2.inRange(hsv_frame, np.array(lower), np.array(upper))
+                mask = cv2.inRange(rgb_frame, np.array(lower), np.array(upper))
                 if combined_mask is None:
                     combined_mask = mask
                 else:

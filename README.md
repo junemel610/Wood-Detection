@@ -61,7 +61,7 @@ python color_wood_detector.py
 
 The application will:
 - Initialize both cameras at 1280x720 resolution
-- Display combined view of top and bottom cameras
+- Display combined view of top and bottom cameras (resized to 852x480 for optimal viewing on 1080p screens)
 - Show detection status and confidence scores
 - Save frames to `captured_frames/` directory
 
@@ -98,13 +98,14 @@ The system uses calibrated HSV ranges for different wood panel types:
 - Upper bound: [125, 40, 240]
 
 **Bottom Panel Profile:**
-- Lower bound: [110, 15, 100]
-- Upper bound: [150, 25, 100]
+- Lower bound: [72, 3, 134]
+- Upper bound: [75, 4, 135]
 
 ### Pixel-to-MM Conversion
 
 Width measurements use calibrated conversion factors:
 - Top camera: 2.96 pixels per mm (at 31cm distance)
+- Bottom camera: 3.18 pixels per mm
 - Calibrate by measuring known distances in captured frames
 
 ### Camera Settings
@@ -113,6 +114,12 @@ Optimized camera parameters for consistent detection:
 - Resolution: 1280x720 (720p)
 - Top camera: brightness=0, contrast=32, saturation=64
 - Bottom camera: brightness=135, contrast=75, saturation=155
+
+### Detection ROIs
+
+Detection processing uses predefined regions of interest for optimal performance:
+- Top camera: 100% width, 80% height (centered vertically)
+- Bottom camera: 80% width, 80% height (centered)
 
 ## Technical Details
 
@@ -132,7 +139,7 @@ Optimized camera parameters for consistent detection:
 - **4-Point Rectangle Detection**: Precise corner point identification
 - **Automatic ROI Generation**: 10% padding around detected wood regions
 - **Confidence Scoring Algorithm**: Area (30%), aspect ratio (30%), solidity (20%), vertices (20%)
-- **Width Measurement**: Real-time mm conversion for top camera detections
+- **Width Measurement**: Real-time mm conversion for top and bottom camera detections
 
 ### Architecture
 
