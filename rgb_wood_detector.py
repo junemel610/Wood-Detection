@@ -17,13 +17,13 @@ class ColorWoodDetector:
     def __init__(self):
         self.wood_color_profiles = {
             'top_panel': {
-                'rgb_lower': np.array([96, 100, 80]),  # BGR order
-                'rgb_upper': np.array([230, 210, 200]),
+                'rgb_lower': np.array([169, 180, 176]),  # BGR
+                'rgb_upper': np.array([211, 219, 210]),
                 'name': 'Top Panel Wood'
             },
             'bottom_panel': {
-                'rgb_lower': np.array([135, 145, 95]),  # RGB range for wood detection
-                'rgb_upper': np.array([200, 220, 230]),  # RGB range for wood detection
+                'rgb_lower': np.array([134, 105, 109]),  # BGR
+                'rgb_upper': np.array([207, 176, 183]),
                 'name': 'Bottom Panel Wood'
             }
         }
@@ -340,7 +340,7 @@ class ColorWoodDetector:
 
         # Step 5: Create result
         result = {
-            'wood_detected': len(wood_candidates) > 0 or texture_confidence > 0.4,
+            'wood_detected': len(wood_candidates) > 0 and wood_candidates[0]['confidence'] > 0.5,
             'wood_count': len(wood_candidates),
             'wood_candidates': wood_candidates,
             'auto_roi': auto_roi,
@@ -413,19 +413,11 @@ class ColorWoodDetector:
         try:
             rgb_frame = frame
 
-            # Define multiple wood color ranges to handle different wood types (refined for consistency)
-            wood_ranges = [
-                # Light wood (pine, birch) - RGB range
-                ([150, 159, 109], [230, 210, 200]),
-                # Medium wood (oak, maple) - RGB range
-                ([130, 150, 160], [180, 200, 210]),
-                # Dark wood (walnut, mahogany) - RGB range
-                ([100, 120, 130], [160, 180, 190])
-            ]
+            # Use calibrated wood color profiles
             
             combined_mask = None
-            for lower, upper in wood_ranges:
-                mask = cv2.inRange(rgb_frame, np.array(lower), np.array(upper))
+            for profile in self.wood_color_profiles.values():
+                mask = cv2.inRange(rgb_frame, profile['rgb_lower'], profile['rgb_upper'])
                 if combined_mask is None:
                     combined_mask = mask
                 else:
@@ -487,7 +479,7 @@ class ColorWoodDetector:
         try:
             # Convert to grayscale and apply edge detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
+            edges = cv2.Canny(gray, 100, 200)
             
             # Find contours
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -547,13 +539,15 @@ class CameraHandler:
             'gain': 0
         }
         self.bottom_camera_settings = {
-            'brightness': 135,
-            'contrast': 75,
-            'saturation': 155,
+            'brightness': 85,
+            'contrast': 125,
+            'saturation': 125,
             'hue': 0,
             'exposure': -6,
-            'white_balance': 5400,
-            'gain': 0
+            'white_balance': 4850,
+            'gain': 0,
+            'sharpness': 200,
+            'backlight_compensation': 1
         }
     def initialize_cameras(self):
         try:
@@ -585,6 +579,8 @@ class CameraHandler:
             camera.set(cv2.CAP_PROP_AUTO_WB, 0)
             camera.set(cv2.CAP_PROP_WB_TEMPERATURE, settings['white_balance'])
             camera.set(cv2.CAP_PROP_GAIN, settings['gain'])
+            camera.set(cv2.CAP_PROP_SHARPNESS, settings['sharpness'])
+            camera.set(cv2.CAP_PROP_BACKLIGHT, settings['backlight_compensation'])
         except Exception as e:
             print(f"Warning: Some camera settings may not be supported: {e}")
     def release_cameras(self):
@@ -601,10 +597,10 @@ def main():
     camera_handler.initialize_cameras()
     detector = ColorWoodDetector()
 
-    # Define center ROIs (top camera 80% height, full width, centered; bottom camera 80% of frame, centered)
+    # Define center ROIs (top camera 70% height, full width, centered; bottom camera 80% of frame, centered)
     frame_width = 1280
     frame_height = 720
-    roi_height_top = int(frame_height * 0.8)
+    roi_height_top = int(frame_height * 0.7)
     roi_y_top = (frame_height - roi_height_top) // 2
     roi_width_top = frame_width
     roi_x_top = 0
@@ -662,11 +658,18 @@ def main():
 
                 top_width_mm = None
 
-            # Bottom camera: always skip wood detection
-            detection_result2 = {'wood_candidates': [], 'color_mask': np.zeros(frame2_flipped.shape[:2], dtype=np.uint8), 'wood_detected': False, 'wood_count': 0, 'confidence': 0.0}
-            wood_detected2 = False
-            confidence2 = 0.0
-            bottom_width_mm = None
+            if detection_enabled:
+                # Process frame from camera 2 (bottom)
+                detection_result2 = detector.detect_wood_comprehensive(frame2_flipped, roi=roi_bottom)
+                wood_detected2 = detection_result2['wood_detected']
+                confidence2 = detection_result2['confidence']
+                bottom_width_mm = None
+            else:
+                # Skip detection processing for bottom
+                detection_result2 = {'wood_candidates': [], 'color_mask': np.zeros(frame2_flipped.shape[:2], dtype=np.uint8), 'wood_detected': False, 'wood_count': 0, 'confidence': 0.0}
+                wood_detected2 = False
+                confidence2 = 0.0
+                bottom_width_mm = None
 
 
             # Draw ROI bounding boxes
@@ -683,6 +686,17 @@ def main():
                 # Add confidence and width label
                 label = f"Wood: {candidate['confidence']:.2f} | Width (vert): {top_width_mm:.1f}mm" if top_width_mm is not None else f"Wood: {candidate['confidence']:.2f}"
                 cv2.putText(frame0, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            # Draw bounding box on frame 2 for the best candidate only
+            if detection_result2['wood_candidates']:
+                candidate = detection_result2['wood_candidates'][0]
+                x, y, w, h = candidate['bbox']
+                color = (0, 255, 0)
+                cv2.rectangle(frame2_flipped, (x, y), (x + w, y + h), color, 2)
+
+                # Add confidence label
+                label = f"Wood: {candidate['confidence']:.2f}"
+                cv2.putText(frame2_flipped, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
             
             
             # Add text overlays
@@ -701,8 +715,12 @@ def main():
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # Camera 2
-            status2 = "NO DETECTION"
-            color2 = (128, 128, 128)
+            if detection_enabled:
+                status2 = "WOOD DETECTED" if wood_detected2 else "NO WOOD"
+                color2 = (0, 255, 0) if wood_detected2 else (0, 0, 255)
+            else:
+                status2 = "DETECTION OFF"
+                color2 = (0, 0, 255)
             cv2.putText(frame2, f"Camera 2 (Bottom): {status2}", (10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color2, 2)
             cv2.putText(frame2, f"Count: {detection_result2['wood_count']} | Confidence: {confidence2:.2f}", (10, 60),
@@ -765,3 +783,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
