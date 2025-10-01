@@ -185,7 +185,7 @@ class ColorWoodDetector:
         self.wood_color_profiles['bottom_panel']['rgb_upper'] = np.array([min(255, r_mean + 30), min(255, g_mean + 30), min(255, b_mean + 30)])
         print(f"🔧 Dynamically updated RGB ranges: R=[{r_mean-30}-{r_mean+30}], G=[{g_mean-30}-{g_mean+30}], B=[{b_mean-30}-{b_mean+30}]")
     
-    def detect_rectangular_contours(self, mask: np.ndarray) -> List[Dict]:
+    def detect_rectangular_contours(self, mask: np.ndarray, camera: str = 'top') -> List[Dict]:
         """Detect rectangular contours that could be wood planks"""
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -206,6 +206,23 @@ class ColorWoodDetector:
 
             # Get bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
+
+            # Filter by minimum size to prevent small detections
+            if camera == 'top':
+                min_height = 266
+                min_width = 100
+            elif camera == 'bottom':
+                min_height = 286
+                min_width = 100
+            else:
+                min_height = 100
+                min_width = 100
+
+            if h < min_height or w < min_width:
+                rejected_area += 1
+                print(f"  ❌ Contour {i}: size {w}x{h} too small for {camera} camera (min {min_width}x{min_height})")
+                continue
+
             aspect_ratio = max(w, h) / min(w, h)
 
             # Filter by aspect ratio (wood planks are typically rectangular)
@@ -303,7 +320,7 @@ class ColorWoodDetector:
         
         return (roi_x1, roi_y1, roi_x2 - roi_x1, roi_y2 - roi_y1)
     
-    def detect_wood_comprehensive(self, image: np.ndarray, profile_names: List[str] = None, roi: Tuple[int, int, int, int] = None) -> Dict:
+    def detect_wood_comprehensive(self, image: np.ndarray, profile_names: List[str] = None, roi: Tuple[int, int, int, int] = None, camera: str = 'top') -> Dict:
         """Comprehensive wood detection combining color and shape analysis"""
 
         print(f"🪵 Starting comprehensive wood detection on image shape: {image.shape}")
@@ -324,7 +341,7 @@ class ColorWoodDetector:
         print(f"🎨 Color mask: {mask_pixels} pixels ({mask_percentage:.1f}%)")
 
         # Step 2: Find rectangular contours
-        wood_candidates = self.detect_rectangular_contours(color_mask)
+        wood_candidates = self.detect_rectangular_contours(color_mask, camera)
         print(f"📐 Found {len(wood_candidates)} wood candidates after contour filtering")
 
         # Step 3: Generate automatic ROI
@@ -340,7 +357,7 @@ class ColorWoodDetector:
 
         # Step 5: Create result
         result = {
-            'wood_detected': len(wood_candidates) > 0 and wood_candidates[0]['confidence'] > 0.5,
+            'wood_detected': len(wood_candidates) > 0,
             'wood_count': len(wood_candidates),
             'wood_candidates': wood_candidates,
             'auto_roi': auto_roi,
@@ -640,7 +657,7 @@ def main():
 
             if detection_enabled:
                 # Process frame from camera 0 (top)
-                detection_result0 = detector.detect_wood_comprehensive(frame0, roi=roi_top)
+                detection_result0 = detector.detect_wood_comprehensive(frame0, roi=roi_top, camera='top')
                 wood_detected0 = detection_result0['wood_detected']
                 confidence0 = detection_result0['confidence']
 
@@ -658,9 +675,12 @@ def main():
 
                 top_width_mm = None
 
+            # Check if bottom camera display should be enabled based on top camera detection
+            bottom_display_enabled = wood_detected0
+
             if detection_enabled:
                 # Process frame from camera 2 (bottom)
-                detection_result2 = detector.detect_wood_comprehensive(frame2_flipped, roi=roi_bottom)
+                detection_result2 = detector.detect_wood_comprehensive(frame2_flipped, roi=roi_bottom, camera='bottom')
                 wood_detected2 = detection_result2['wood_detected']
                 confidence2 = detection_result2['confidence']
                 bottom_width_mm = None
@@ -687,8 +707,8 @@ def main():
                 label = f"Wood: {candidate['confidence']:.2f} | Width (vert): {top_width_mm:.1f}mm" if top_width_mm is not None else f"Wood: {candidate['confidence']:.2f}"
                 cv2.putText(frame0, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
-            # Draw bounding box on frame 2 for the best candidate only
-            if detection_result2['wood_candidates']:
+            # Draw bounding box on frame 2 for the best candidate only (conditional on top camera confidence)
+            if bottom_display_enabled and detection_result2['wood_candidates']:
                 candidate = detection_result2['wood_candidates'][0]
                 x, y, w, h = candidate['bbox']
                 color = (0, 255, 0)
@@ -716,8 +736,12 @@ def main():
 
             # Camera 2
             if detection_enabled:
-                status2 = "WOOD DETECTED" if wood_detected2 else "NO WOOD"
-                color2 = (0, 255, 0) if wood_detected2 else (0, 0, 255)
+                if bottom_display_enabled:
+                    status2 = "WOOD DETECTED" if wood_detected2 else "NO WOOD"
+                    color2 = (0, 255, 0) if wood_detected2 else (0, 0, 255)
+                else:
+                    status2 = "WAITING FOR TOP DETECTION"
+                    color2 = (0, 165, 255)  # Orange color for waiting
             else:
                 status2 = "DETECTION OFF"
                 color2 = (0, 0, 255)
